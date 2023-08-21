@@ -1,0 +1,40 @@
+name: SSL Expiry Checker
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Schedule to run daily at midnight UTC
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  check-ssl-expiry:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssl
+
+      - name: Read domain list from file
+        id: read-domains
+        run: |
+          echo "::set-output name=domains::$(cat domains.txt)"
+
+      - name: Check SSL expiry and send Slack notification
+        run: |
+          DOMAINS=(${{ steps.read-domains.outputs.domains }})
+
+          for DOMAIN in "${DOMAINS[@]}"; do
+            EXPIRY_DATE=$(openssl s_client -servername "$DOMAIN" -connect "$DOMAIN:443" </dev/null 2>/dev/null | openssl x509 -noout -dates | grep "notAfter" | cut -d "=" -f 2)
+            EXPIRY_TIMESTAMP=$(date -d "$EXPIRY_DATE" +%s)
+            CURRENT_TIMESTAMP=$(date +%s)
+            EXPIRY_IN_DAYS=$(( ($EXPIRY_TIMESTAMP - $CURRENT_TIMESTAMP) / 86400 ))
+
+            if [ "$EXPIRY_IN_DAYS" -lt 30 ]; then
+              SLACK_MESSAGE="SSL Expiry Alert\n   * Domain : $DOMAIN\n   * Warning : The SSL certificate for $DOMAIN will expire in $EXPIRY_IN_DAYS days."
+              curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"$SLACK_MESSAGE\"}" ${{ secrets.SLACK_WEBHOOK_URL }}
+            fi
+          done
